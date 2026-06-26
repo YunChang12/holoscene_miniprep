@@ -1,0 +1,48 @@
+scene:
+  name: room0_mini_da3
+  input_type: images
+  input_path: tmp_tests/room0_mini/images
+  output_dir: data_dir/custom/room0_mini_da3
+
+frame:
+  target_fps: 3
+  max_frames: null
+  resolution: [512, 512]
+  overwrite: false
+
+camera:
+  mode: provided
+  provided_transforms: tmp_tests/room0_mini/transforms_official.json
+
+mask:
+  mode: dummy
+  background_value: 255
+  overwrite: false
+
+depth:
+  mode: zaiwu_da3
+  service_url: http://127.0.0.1:8443
+  clip_min: 0.05
+  clip_max: 20.0
+  overwrite: false
+
+normal:
+  mode: depth_to_normal
+  overwrite: false
+
+graph:
+  mode: auto_simple
+  root_id: 0
+  vertical_gap_threshold: 0.08
+  xy_overlap_threshold: 0.15
+
+validation:
+  strict: false
+
+review:
+  make_mask_overlay: true
+  make_depth_vis: true
+  make_normal_vis: true
+  export_camera_trajectory: true
+  export_instance_clouds: true
+  export_graph_vis: true

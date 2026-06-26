@@ -1,0 +1,47 @@
+scene:
+  name: smoke_scene
+  input_type: images
+  input_path: /root/autodl-fs/Chengpeng/holoscene_miniprep/tmp_demo/input_images
+  output_dir: /root/autodl-fs/Chengpeng/holoscene_miniprep/tmp_demo/data_dir/custom/smoke_scene
+
+frame:
+  target_fps: 3
+  max_frames: 4
+  resolution: [128, 128]
+  overwrite: true
+
+camera:
+  mode: fixed
+  provided_transforms: null
+  fixed_camera: true
+  assume_fov_deg: 60
+
+mask:
+  mode: dummy
+  provided_dir: null
+  background_value: 255
+  min_area_ratio: 0.001
+
+depth:
+  mode: dummy
+  provided_dir: null
+  save_format: npy
+  clip_min: 0.05
+  clip_max: 20.0
+
+normal:
+  mode: depth_to_normal
+  provided_dir: null
+  save_format: png
+
+graph:
+  mode: auto_simple
+  manual_graph: null
+  root_id: 0
+  vertical_gap_threshold: 0.08
+  xy_overlap_threshold: 0.15
+
+review:
+  make_mask_overlay: true
+  make_depth_vis: true
+  make_normal_vis: true

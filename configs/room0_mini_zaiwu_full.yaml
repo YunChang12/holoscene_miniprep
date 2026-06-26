@@ -1,0 +1,62 @@
+scene:
+  name: room0_mini_zaiwu_full
+  input_type: images
+  input_path: tmp_tests/room0_mini/images
+  output_dir: data_dir/custom/room0_mini_zaiwu_full
+
+frame:
+  target_fps: 3
+  max_frames: null
+  resolution: [512, 512]
+  overwrite: false
+
+camera:
+  mode: zaiwu_vggt
+  service_url: http://127.0.0.1:20008
+  output_convention: camera_to_world
+  input_convention: auto
+  scale_align_with_depth: true
+  depth_source_for_scale: depth
+  fallback_transforms: tmp_tests/room0_mini/transforms_official.json
+  overwrite: false
+
+mask:
+  mode: zaiwu_seg2track_sam2
+  service_url: http://127.0.0.1:20010
+  text_prompt: "chair. table. sofa. cup. bowl. book. bed. cabinet. shelf. lamp."
+  detect_interval: 5
+  window_size: 300
+  box_threshold: 0.3
+  text_threshold: 0.25
+  background_value: 255
+  min_area_ratio: 0.001
+  min_visible_frames: 3
+  overwrite: false
+
+depth:
+  mode: zaiwu_da3
+  service_url: http://127.0.0.1:8443
+  clip_min: 0.05
+  clip_max: 20.0
+  overwrite: false
+
+normal:
+  mode: depth_to_normal
+  overwrite: false
+
+graph:
+  mode: auto_simple
+  root_id: 0
+  vertical_gap_threshold: 0.08
+  xy_overlap_threshold: 0.15
+
+validation:
+  strict: false
+
+review:
+  make_mask_overlay: true
+  make_depth_vis: true
+  make_normal_vis: true
+  export_camera_trajectory: true
+  export_instance_clouds: true
+  export_graph_vis: true

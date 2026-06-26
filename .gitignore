@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.pyo
+
+data_dir/
+tmp_tests/
+tmp_demo/data_dir/
+logs/
+
+README.md.corrupt.bak
+.DS_Store
