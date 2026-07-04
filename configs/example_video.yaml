@@ -6,6 +6,7 @@ scene:
 
 frame:
   target_fps: 3
+  stride: null
   max_frames: 120
   resolution: [512, 512]
   overwrite: true
@@ -16,11 +17,26 @@ camera:
   fixed_camera: true
   assume_fov_deg: 60
 
+vlm:
+  config_path: configs/vlm_local.yaml
+  frame_sampling:
+    max_images: 8
+    strategy: uniform
+    image_max_side: 768
+
 mask:
-  mode: dummy
+  mode: zaiwu_seg2track_sam2
+  service_url: http://127.0.0.1:20010
+  text_prompt: auto
+  use_vlm_prompt: true
   provided_dir: null
+  detect_interval: 3
+  window_size: 300
+  box_threshold: 0.25
+  text_threshold: 0.2
   background_value: 255
   min_area_ratio: 0.001
+  min_visible_frames: 2
 
 depth:
   mode: dummy

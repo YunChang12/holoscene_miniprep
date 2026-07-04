@@ -20,10 +20,18 @@ camera:
   fallback_transforms: tmp_tests/room0_mini/transforms_official.json
   overwrite: false
 
+vlm:
+  config_path: configs/vlm_local.yaml
+  frame_sampling:
+    max_images: 8
+    strategy: uniform
+    image_max_side: 768
+
 mask:
   mode: zaiwu_seg2track_sam2
   service_url: http://127.0.0.1:20010
-  text_prompt: "chair. table. sofa. cup. bowl. book. bed. cabinet. shelf. lamp."
+  text_prompt: auto
+  use_vlm_prompt: true
   detect_interval: 5
   window_size: 300
   box_threshold: 0.3

@@ -7,5 +7,8 @@ tmp_tests/
 tmp_demo/data_dir/
 logs/
 
+# Local API credentials and machine-specific VLM settings.
+configs/vlm_local.yaml
+
 README.md.corrupt.bak
 .DS_Store

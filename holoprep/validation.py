@@ -364,6 +364,14 @@ def _check_masks(
         object_labels = [v for v in labels if v != 255]
         if 255 not in labels:
             _error(errors, "mask", f"{stem} mask 不包含背景值 255。", "确保背景像素为 255。")
+        abnormal_high_labels = [v for v in object_labels if v >= 253]
+        if abnormal_high_labels:
+            _error(
+                errors,
+                "mask",
+                f"{stem} mask 包含异常高前景 label: {abnormal_high_labels}",
+                "背景只能是 255；前景应 remap 为连续的 0..N-1，不能出现 253/254。",
+            )
         total = float(arr.shape[0] * arr.shape[1])
         frame_stats = {"mode": mode, "labels": labels, "instances": {}}
         for label in object_labels:

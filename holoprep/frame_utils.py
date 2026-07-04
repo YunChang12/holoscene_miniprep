@@ -28,6 +28,7 @@ def _load_cv2():
 def extract_frames_from_video(
     video_path: str | Path,
     target_fps: float,
+    frame_stride: int | None,
     max_frames: int | None,
     resolution: tuple[int, int],
     output_dir: str | Path,
@@ -46,7 +47,13 @@ def extract_frames_from_video(
     source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
     if source_fps <= 1e-6:
         source_fps = 30.0
-    stride = max(1, int(round(source_fps / max(float(target_fps), 1e-6))))
+    if frame_stride is not None:
+        stride = int(frame_stride)
+        if stride <= 0:
+            raise ValueError("frame.stride must be a positive integer")
+    else:
+        stride = max(1, int(round(source_fps / max(float(target_fps), 1e-6))))
+    LOGGER.info("Video source_fps=%.3f, extraction stride=%d", source_fps, stride)
     frame_meta: list[dict[str, Any]] = []
     frame_idx = 0
     out_idx = 0
@@ -104,6 +111,7 @@ def write_images(
     image_paths: list[Path],
     resolution: tuple[int, int],
     output_dir: str | Path,
+    frame_stride: int | None = None,
     max_frames: int | None = None,
     overwrite: bool = True,
 ) -> list[dict[str, Any]]:
@@ -111,9 +119,14 @@ def write_images(
 
     images_dir = reset_dir(output_dir) if overwrite else ensure_dir(output_dir)
     width, height = resolution
-    selected = image_paths[: int(max_frames)] if max_frames else image_paths
+    stride = int(frame_stride) if frame_stride is not None else 1
+    if stride <= 0:
+        raise ValueError("frame.stride must be a positive integer")
+    selected = [(source_idx, path) for source_idx, path in enumerate(image_paths) if source_idx % stride == 0]
+    if max_frames:
+        selected = selected[: int(max_frames)]
     frame_meta: list[dict[str, Any]] = []
-    for idx, src in enumerate(selected):
+    for idx, (source_idx, src) in enumerate(selected):
         with Image.open(src) as im:
             rgb = im.convert("RGB")
             original_size = [rgb.width, rgb.height]
@@ -123,7 +136,7 @@ def write_images(
         frame_meta.append(
             {
                 "frame_index": idx,
-                "source_frame_index": idx,
+                "source_frame_index": source_idx,
                 "timestamp": None,
                 "source_path": str(src),
                 "file_path": f"images/{filename}",
@@ -131,7 +144,7 @@ def write_images(
                 "output_size": [width, height],
             }
         )
-    LOGGER.info("Wrote %d normalized images to %s", len(frame_meta), images_dir)
+    LOGGER.info("Wrote %d normalized images to %s with stride=%d", len(frame_meta), images_dir, stride)
     return frame_meta
 
 

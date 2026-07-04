@@ -45,6 +45,7 @@ from .normal_utils import (
 )
 from .validation import validate_scene
 from .visualization import visualize_scene
+from .vlm_utils import generate_vlm_object_prompt, load_vlm_prompt_for_mask
 from .writer import ensure_dir, read_json, write_json
 from .wrappers.depth_wrapper import ZaiwuDepthAnythingWrapper
 from .wrappers.seg2track_sam2_wrapper import ZaiwuSeg2TrackSAM2Wrapper
@@ -52,8 +53,9 @@ from .wrappers.vggt_wrapper import ZaiwuVGGTWrapper
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_STAGES = ["frames", "camera", "mask", "depth", "normal", "geometry", "graph", "validate", "review"]
+DEFAULT_STAGES = ["frames", "camera", "vlm", "mask", "depth", "normal", "geometry", "graph", "validate", "review"]
 KNOWN_STAGES = set(DEFAULT_STAGES)
+OPEN_VOCAB_MASK_MODES = {"sam2", "provided_or_sam2", "zaiwu_seg2track_sam2"}
 
 
 def parse_stages(value: str | None) -> list[str]:
@@ -103,6 +105,8 @@ def run_pipeline(config: PrepConfig, stages: Iterable[str] | None = None, resume
 
         if stage == "camera":
             transforms = _stage_camera(config, frame_count, resume=resume)
+        elif stage == "vlm":
+            _stage_vlm(config, frame_count, resume=resume)
         elif stage == "mask":
             _stage_mask(config, frame_count, resume=resume)
         elif stage == "depth":
@@ -153,6 +157,7 @@ def _stage_frames(config: PrepConfig, resume: bool) -> list[dict[str, Any]]:
         frame_meta = extract_frames_from_video(
             video_path=input_path,
             target_fps=float(frame_cfg.get("target_fps", 3)),
+            frame_stride=_optional_int(frame_cfg.get("stride", frame_cfg.get("frame_stride"))),
             max_frames=int(max_frames) if max_frames else None,
             resolution=resolution,
             output_dir=images_dir,
@@ -163,6 +168,7 @@ def _stage_frames(config: PrepConfig, resume: bool) -> list[dict[str, Any]]:
         frame_meta = write_images(
             image_paths=image_paths,
             resolution=resolution,
+            frame_stride=_optional_int(frame_cfg.get("stride", frame_cfg.get("frame_stride"))),
             output_dir=images_dir,
             max_frames=int(max_frames) if max_frames else None,
             overwrite=overwrite,
@@ -215,7 +221,7 @@ def _stage_mask(config: PrepConfig, frame_count: int, resume: bool) -> dict[str,
     if resume and _has_files(scene / "instance_mask", "frame*.png") and (scene / "meta" / "id_mapping.json").is_file():
         LOGGER.info("[mask] resume: using existing instance_mask")
         return load_id_mapping(scene)
-    mask_cfg = section(config, "mask")
+    mask_cfg = _mask_config_with_vlm_prompt(config, section(config, "mask"))
     mode = str(mask_cfg.get("mode", "dummy")).lower()
     provided = _optional_path(mask_cfg.get("provided_dir"))
     background_value = int(mask_cfg.get("background_value", 255))
@@ -254,6 +260,57 @@ def _stage_mask(config: PrepConfig, frame_count: int, resume: bool) -> dict[str,
     LOGGER.info("[mask] wrote %d masks with %d objects", len(remapped), len(mapping.get("objects", [])))
     return mapping
 
+
+def _stage_vlm(config: PrepConfig, frame_count: int, resume: bool) -> dict[str, Any]:
+    scene = config.output_dir
+    if not _mask_cfg_wants_vlm(section(config, "mask")):
+        LOGGER.info("[vlm] skipped: mask mode does not need VLM open-vocabulary prompt")
+        return {"enabled": False, "source": "skipped_mask_mode", "prompt": None}
+    report_path = scene / "meta" / "vlm_object_prompt.json"
+    if resume and report_path.is_file():
+        LOGGER.info("[vlm] resume: using existing vlm_object_prompt.json")
+        return read_json(report_path)
+    report = generate_vlm_object_prompt(
+        scene_dir=scene,
+        scene_name=config.scene_name,
+        config=section(config, "vlm"),
+        frame_count=frame_count,
+    )
+    LOGGER.info("[vlm] wrote prompt: %s", report.get("prompt"))
+    return report
+
+
+def _mask_config_with_vlm_prompt(config: PrepConfig, mask_cfg: dict[str, Any]) -> dict[str, Any]:
+    cfg = dict(mask_cfg)
+    if not _mask_cfg_wants_vlm(cfg):
+        return cfg
+
+    report = load_vlm_prompt_for_mask(config.output_dir)
+    prompt = str(report.get("prompt") or "").strip()
+    if not prompt:
+        raise RuntimeError(f"VLM prompt report has empty prompt: {config.output_dir / 'meta' / 'vlm_object_prompt.json'}")
+    cfg["text_prompt"] = prompt
+    cfg.setdefault("ignored_labels", report.get("ignored_labels", []))
+    cfg.setdefault("background_labels", report.get("background_labels", []))
+    LOGGER.info("[mask] using VLM text_prompt: %s", prompt)
+    return cfg
+
+
+def _mask_cfg_wants_vlm(mask_cfg: dict[str, Any]) -> bool:
+    cfg = dict(mask_cfg)
+    mode = str(cfg.get("mode", "dummy")).lower()
+    if mode not in OPEN_VOCAB_MASK_MODES:
+        return False
+    provided = _optional_path(cfg.get("provided_dir"))
+    if mode == "provided_or_sam2" and provided and provided.is_dir():
+        return False
+
+    explicit = _optional_bool(cfg.get("use_vlm_prompt"))
+    if explicit is not None:
+        return explicit
+
+    text_prompt = str(cfg.get("text_prompt", "")).strip().lower()
+    return text_prompt in {"", "auto", "vlm", "from_vlm"}
 
 def _stage_depth(config: PrepConfig, frame_count: int, resume: bool) -> Path:
     scene = config.output_dir
@@ -444,3 +501,22 @@ def _optional_path(value: Any) -> Path | None:
     if value in (None, ""):
         return None
     return Path(value).expanduser()
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Expected boolean value, got: {value!r}")

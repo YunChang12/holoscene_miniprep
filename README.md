@@ -95,6 +95,13 @@ pip install -r requirements.txt
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py --config configs/example_video.yaml
 ```
 
+如果希望按固定步长抽帧，例如每 2 帧取 1 帧，在配置的 `frame` 段设置：
+
+```yaml
+frame:
+  stride: 2
+```
+
 单独验证已生成的 scene：
 
 ```bash
@@ -112,7 +119,7 @@ pip install -r requirements.txt
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/example_images.yaml \
-  --stages frames,camera,mask,depth,normal,geometry,graph,validate,review
+  --stages frames,camera,vlm,mask,depth,normal,geometry,graph,validate,review
 ```
 
 复用已有阶段产物：
@@ -133,6 +140,7 @@ pip install -r requirements.txt
 `frame`：
 
 - `target_fps`：视频抽帧 fps。
+- `stride`：抽帧/抽图步长，例如 `2` 表示每 2 帧/张取 1 帧/张；视频输入设置后优先于 `target_fps`。也可写作 `frame_stride`。
 - `max_frames`：最多输出帧数。
 - `resolution`：输出分辨率，格式为 `[width, height]`。
 - `overwrite`：是否覆盖已有 `images/`。
@@ -144,6 +152,14 @@ pip install -r requirements.txt
 - `provided_or_vggt`：如果存在 provided transforms 就读取，否则调用 VGGT wrapper。
 - `vggt`：调用 `holoprep/wrappers/vggt_wrapper.py`，当前为占位实现。
 - `zaiwu_vggt`：调用 Zaiwu VGGT 服务，生成 `transforms.json`，并可与官方 `fallback_transforms` 对比。
+
+`vlm`：
+
+- 默认全流程阶段为 `frames,camera,vlm,mask,depth,normal,geometry,graph,validate,review`。
+- 对 `sam2`、`provided_or_sam2`、`zaiwu_seg2track_sam2` 这类开放词汇 mask 模式，MiniPrep 默认先用 VLM 生成 `meta/vlm_object_prompt.json`，再把其中的 `prompt` 传给 mask 阶段。
+- `mask.text_prompt: auto`、`vlm`、`from_vlm`，或 `mask.use_vlm_prompt: true` 都会启用 VLM prompt。
+- 如果需要完全手写词表，设置明确的 `mask.text_prompt` 并配置 `mask.use_vlm_prompt: false`。
+- VLM 默认读取 `configs/vlm_local.yaml`，也可在 `vlm.config_path` 中指定 OpenAI-compatible chat completion 配置。
 
 `mask.mode`：
 
@@ -227,6 +243,7 @@ holoprep/wrappers/normal_wrapper.py
 
 推荐与 Zaiwu 服务的映射关系：
 
+- VLM：调用 OpenAI-compatible chat completion 接口，从抽样帧生成开放词汇 `text_prompt`。
 - VGGT：调用 `services.vggt.reconstruct_scene_from_dir`，再把返回的 intrinsics/extrinsics 转成 HoloScene `transforms.json`。
 - Seg2Track-SAM2：调用 `services.seg2track_sam2.seg2track_parse_video`，再把 `mask_rle` 转成逐帧 `instance_mask/*.png`。
 - HoloScene Stage 0 或 Marigold：生成 `depth/*.npy` 和 `normal/*.png`。
@@ -290,7 +307,7 @@ tmp_tests/room0_mini/
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/room0_mini_official_camera_da3.yaml \
-  --stages frames,camera,mask,depth,normal,geometry,graph,validate,review \
+  --stages frames,camera,vlm,mask,depth,normal,geometry,graph,validate,review \
   --resume
 
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/test_holoscene_loader.py \
@@ -309,7 +326,7 @@ tmp_tests/room0_mini/
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/room0_mini_zaiwu_depth_s2t.yaml \
-  --stages frames,camera,depth,normal,mask,geometry,graph,validate,review \
+  --stages frames,camera,depth,normal,vlm,mask,geometry,graph,validate,review \
   --resume
 
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/test_holoscene_loader.py \
@@ -329,7 +346,7 @@ tmp_tests/room0_mini/
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/room0_mini_zaiwu_full.yaml \
-  --stages frames,depth,mask,camera,normal,geometry,graph,validate,review \
+  --stages frames,depth,vlm,mask,camera,normal,geometry,graph,validate,review \
   --resume
 
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/test_holoscene_loader.py \
@@ -491,7 +508,7 @@ python training/exp_runner.py \
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/example_video.yaml \
-  --stages mask,geometry,graph,validate,review \
+  --stages vlm,mask,geometry,graph,validate,review \
   --resume
 ```
 
