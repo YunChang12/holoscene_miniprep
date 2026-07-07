@@ -22,7 +22,7 @@ def main() -> int:
     parser.add_argument(
         "--stages",
         default=None,
-        help="Comma-separated stages. Default: frames,camera,vlm,mask,depth,normal,geometry,graph,validate,review.",
+        help="Comma-separated stages. Default: frames,camera,vlm,mask,depth,camera_scale,normal,geometry,graph,validate,review.",
     )
     parser.add_argument("--resume", action="store_true", help="Reuse existing stage outputs when possible.")
     parser.add_argument("--log-level", default="INFO", help="Python logging level.")

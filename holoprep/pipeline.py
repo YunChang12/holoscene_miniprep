@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from .camera_scale import align_camera_scale_with_depth
 from .camera_utils import (
     create_fixed_camera_transforms,
     estimate_transforms_with_vggt_placeholder,
@@ -49,11 +50,11 @@ from .vlm_utils import generate_vlm_object_prompt, load_vlm_prompt_for_mask
 from .writer import ensure_dir, read_json, write_json
 from .wrappers.depth_wrapper import ZaiwuDepthAnythingWrapper
 from .wrappers.seg2track_sam2_wrapper import ZaiwuSeg2TrackSAM2Wrapper
-from .wrappers.vggt_wrapper import ZaiwuVGGTWrapper
+from .wrappers.vggt_wrapper import LongSequenceVGGTWrapper, ZaiwuVGGTWrapper
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_STAGES = ["frames", "camera", "vlm", "mask", "depth", "normal", "geometry", "graph", "validate", "review"]
+DEFAULT_STAGES = ["frames", "camera", "vlm", "mask", "depth", "camera_scale", "normal", "geometry", "graph", "validate", "review"]
 KNOWN_STAGES = set(DEFAULT_STAGES)
 OPEN_VOCAB_MASK_MODES = {"sam2", "provided_or_sam2", "zaiwu_seg2track_sam2"}
 
@@ -111,6 +112,9 @@ def run_pipeline(config: PrepConfig, stages: Iterable[str] | None = None, resume
             _stage_mask(config, frame_count, resume=resume)
         elif stage == "depth":
             _stage_depth(config, frame_count, resume=resume)
+        elif stage == "camera_scale":
+            transforms = transforms or read_json(scene_dir / "transforms.json")
+            transforms = _stage_camera_scale(config, frame_count, transforms, resume=resume)
         elif stage == "normal":
             transforms = transforms or read_json(scene_dir / "transforms.json")
             _stage_normal(config, frame_count, transforms, resume=resume)
@@ -209,9 +213,19 @@ def _stage_camera(config: PrepConfig, frame_count: int, resume: bool) -> dict[st
             resolution=config.resolution,
             scene_id=config.scene_name,
         )
+    elif mode == "long_sequence_vggt":
+        transforms = LongSequenceVGGTWrapper().run(
+            image_dir=scene / "images",
+            output_dir=scene,
+            config=cam_cfg,
+            frame_count=frame_count,
+            resolution=config.resolution,
+            scene_id=config.scene_name,
+        )
     else:
         raise ValueError(f"Unsupported camera.mode: {mode}")
     write_transforms_json(scene, transforms)
+    _clear_camera_scale_artifacts(scene)
     LOGGER.info("[camera] wrote transforms.json using mode=%s", mode)
     return transforms
 
@@ -349,6 +363,53 @@ def _stage_depth(config: PrepConfig, frame_count: int, resume: bool) -> Path:
     return out
 
 
+def _stage_camera_scale(config: PrepConfig, frame_count: int, transforms: dict[str, Any], resume: bool) -> dict[str, Any]:
+    scene = config.output_dir
+    scale_cfg = section(config, "camera_scale")
+    if not bool(scale_cfg.get("enabled", False)):
+        LOGGER.info("[camera_scale] skipped: camera_scale.enabled is false")
+        return transforms
+
+    report_path = scene / "meta" / "camera_scale_alignment_report.json"
+    backup_path = scene / "meta" / "transforms_before_scale_align.json"
+    overwrite = bool(scale_cfg.get("overwrite", False))
+    if resume and report_path.is_file():
+        LOGGER.info("[camera_scale] resume: using existing camera_scale_alignment_report.json")
+        return read_json(scene / "transforms.json")
+    if report_path.is_file() and not overwrite:
+        LOGGER.info("[camera_scale] existing report found; set camera_scale.overwrite=true to recompute")
+        return read_json(scene / "transforms.json")
+
+    input_transforms = transforms
+    if overwrite and backup_path.is_file() and bool(scale_cfg.get("use_backup_as_input", True)):
+        input_transforms = read_json(backup_path)
+        LOGGER.info("[camera_scale] recomputing from transforms_before_scale_align.json")
+    elif bool(scale_cfg.get("write_backup", True)):
+        write_json(backup_path, {k: v for k, v in transforms.items() if not str(k).startswith("_")})
+
+    aligned, report = align_camera_scale_with_depth(
+        scene,
+        input_transforms,
+        scale_cfg,
+        frame_count=frame_count,
+    )
+    write_json(report_path, report)
+    if not report.get("scale_aligned", False):
+        LOGGER.warning("[camera_scale] skipped transform update: %s", report.get("reason", "scale alignment failed"))
+        return transforms
+
+    writable = dict(aligned)
+    writable["_camera_report_extra"] = {
+        "scale_aligned": True,
+        "scale_factor": report.get("scale_factor"),
+        "scale_source": "camera_scale",
+        "camera_scale_report": str(report_path),
+    }
+    write_transforms_json(scene, writable)
+    LOGGER.info("[camera_scale] applied scale_factor=%.6g", float(report["scale_factor"]))
+    return aligned
+
+
 def _stage_normal(config: PrepConfig, frame_count: int, transforms: dict[str, Any], resume: bool) -> Path:
     scene = config.output_dir
     if resume and _has_files(scene / "normal", "frame*.png"):
@@ -472,6 +533,7 @@ def _write_preprocess_metadata(
         "frame_count": int(frame_count),
         "stages": stages,
         "camera_mode": section(config, "camera").get("mode"),
+        "camera_scale_enabled": bool(section(config, "camera_scale").get("enabled", False)),
         "mask_mode": section(config, "mask").get("mode"),
         "depth_mode": section(config, "depth").get("mode"),
         "normal_mode": section(config, "normal").get("mode"),
@@ -495,6 +557,17 @@ def _write_preprocess_metadata(
 
 def _has_files(path: Path, pattern: str) -> bool:
     return path.is_dir() and any(path.glob(pattern))
+
+
+def _clear_camera_scale_artifacts(scene: Path) -> None:
+    for path in [
+        scene / "meta" / "camera_scale_alignment_report.json",
+        scene / "meta" / "transforms_before_scale_align.json",
+    ]:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
 
 
 def _optional_path(value: Any) -> Path | None:

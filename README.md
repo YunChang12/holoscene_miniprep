@@ -119,7 +119,7 @@ frame:
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/example_images.yaml \
-  --stages frames,camera,vlm,mask,depth,normal,geometry,graph,validate,review
+  --stages frames,camera,vlm,mask,depth,camera_scale,normal,geometry,graph,validate,review
 ```
 
 复用已有阶段产物：
@@ -152,10 +152,87 @@ frame:
 - `provided_or_vggt`：如果存在 provided transforms 就读取，否则调用 VGGT wrapper。
 - `vggt`：调用 `holoprep/wrappers/vggt_wrapper.py`，当前为占位实现。
 - `zaiwu_vggt`：调用 Zaiwu VGGT 服务，生成 `transforms.json`，并可与官方 `fallback_transforms` 对比。
+- `long_sequence_vggt`：调用外部 `vggt_long_sequence_pose` 项目做分段 VGGT、Sim(3) 对齐、窗口质量门控和融合，然后转换为 MiniPrep/HoloScene 的 `transforms.json`。推荐用于几百帧到上千帧的长序列。
+
+长序列 VGGT 示例：
+
+```yaml
+camera:
+  mode: long_sequence_vggt
+  service_url: http://127.0.0.1:20008/sse
+  long_sequence_project_dir: /autodl-fs/data/Chengpeng/vggt_long_sequence_pose
+  input_convention: auto
+  max_image_size: 518
+  keyframe_interval: 5
+  key_window_size: 80
+  key_overlap: 20
+  all_window_size: 80
+  all_overlap: 30
+  max_anchor_translation_rmse: 0.15
+  max_anchor_rotation_deg: 10.0
+  low_quality_fallback_weight: 0.25
+  resume: true
+```
+
+该模式必须在 `frames` 阶段之后运行，会对 MiniPrep 已经规范化后的
+`images/frameXXXXXX.jpg` 进行分段 VGGT。分段项目原始输出保存在
+`raw_outputs/vggt_long_sequence/`，MiniPrep 会把其中的
+`final_transforms.json` 转换为 `images/frameXXXXXX.jpg` 路径格式，并把
+窗口质量统计写入 `meta/camera_source_report.json`。如果不在 YAML 中写
+`long_sequence_project_dir`，也可以通过环境变量
+`HOLOSCENE_LONG_SEQUENCE_VGGT_DIR` 指定。
+
+`camera_scale`：
+
+- `enabled`：默认 `false`。设为 `true` 后，在 `depth` 阶段之后用 `images/`、`depth/*.npy` 和当前 `transforms.json` 估计一个全局尺度。
+- `method`：当前支持 `depth_correspondence`。
+- `pair_strategy`：默认 `multi_gap`，会从多个时间间隔采样帧对并优先使用更可靠的 baseline；如需旧行为可设为 `single_gap`。
+- `pair_stride` 或 `pair_gap`：基础间隔，默认 `5`。在 `multi_gap` 下会自动扩展为 `pair_stride * [1,2,4,8,16]`。
+- `pair_gap_multipliers`：自动扩展倍数，默认 `[1, 2, 4, 8, 16]`。
+- `pair_gaps`：显式指定多间隔列表，例如 `[5, 10, 20, 40, 80]`，优先级高于 `pair_stride`。
+- `max_pair_gap`：限制自动扩展出的最大间隔。
+- `max_pairs`：最多用于估计的图像对数量，默认 `80`。`multi_gap` 会在多个 gap 内均匀覆盖时间轴，再用较大 baseline 候选补齐。
+- `min_baseline`：VGGT 相机中心最小间距，过小的帧对会跳过。
+- `selection_min_baseline`：帧对选择阶段的最小 baseline；默认复用 `min_baseline`，用于避免把名额浪费在明显短基线帧对上。
+- `min_depth`、`max_depth`：参与尺度估计的 depth 范围。
+- `min_matches`、`min_observations`：每对/全局最少有效匹配数。
+- `min_used_pairs`：全局最少可用帧对数。`multi_gap` 默认 `3`，防止只靠单一帧对完成尺度对齐；`single_gap` 默认 `1`。
+- `max_pair_scale_spread_ratio`：多帧对尺度候选一致性门控，默认 `3.0`；若 pair-level 的 p90/p10 超过该值，则拒绝写入尺度，避免 DA3 等深度源跨帧尺度漂移时误对齐。设为 `0` 可关闭。
+- `ransac_threshold`：深度三维残差阈值。
+- `anchor`：缩放相机中心时保持不动的锚点，默认 `first`。
+- `write_backup`：默认 `true`，会写出 `meta/transforms_before_scale_align.json`。
+- `overwrite`：默认 `false`，已有 `meta/camera_scale_alignment_report.json` 时不重复缩放；需要重新估计时设为 `true`。
+
+示例：
+
+```yaml
+camera_scale:
+  enabled: true
+  method: depth_correspondence
+  pair_strategy: multi_gap
+  pair_stride: 5
+  pair_gaps: [5, 10, 20, 40, 80]
+  max_pairs: 80
+  min_baseline: 0.02
+  min_used_pairs: 3
+  min_depth: 0.05
+  max_depth: 20.0
+  min_matches: 50
+  min_observations: 200
+  max_pair_scale_spread_ratio: 3.0
+  ransac_threshold: 0.15
+  anchor: first
+  write_backup: true
+  overwrite: false
+```
+
+该阶段只修改 `frames[*].transform_matrix` 的平移列，不改变 `transforms.json`
+的字段格式。尺度因子、匹配统计和失败原因写入
+`meta/camera_scale_alignment_report.json`。
 
 `vlm`：
 
-- 默认全流程阶段为 `frames,camera,vlm,mask,depth,normal,geometry,graph,validate,review`。
+- 默认全流程阶段为 `frames,camera,vlm,mask,depth,camera_scale,normal,geometry,graph,validate,review`。
 - 对 `sam2`、`provided_or_sam2`、`zaiwu_seg2track_sam2` 这类开放词汇 mask 模式，MiniPrep 默认先用 VLM 生成 `meta/vlm_object_prompt.json`，再把其中的 `prompt` 传给 mask 阶段。
 - `mask.text_prompt: auto`、`vlm`、`from_vlm`，或 `mask.use_vlm_prompt: true` 都会启用 VLM prompt。
 - 如果需要完全手写词表，设置明确的 `mask.text_prompt` 并配置 `mask.use_vlm_prompt: false`。
@@ -307,7 +384,7 @@ tmp_tests/room0_mini/
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/room0_mini_official_camera_da3.yaml \
-  --stages frames,camera,vlm,mask,depth,normal,geometry,graph,validate,review \
+  --stages frames,camera,vlm,mask,depth,camera_scale,normal,geometry,graph,validate,review \
   --resume
 
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/test_holoscene_loader.py \
@@ -326,7 +403,7 @@ tmp_tests/room0_mini/
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/room0_mini_zaiwu_depth_s2t.yaml \
-  --stages frames,camera,depth,normal,vlm,mask,geometry,graph,validate,review \
+  --stages frames,camera,depth,camera_scale,normal,vlm,mask,geometry,graph,validate,review \
   --resume
 
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/test_holoscene_loader.py \
@@ -346,7 +423,7 @@ tmp_tests/room0_mini/
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/room0_mini_zaiwu_full.yaml \
-  --stages frames,depth,vlm,mask,camera,normal,geometry,graph,validate,review \
+  --stages frames,depth,vlm,mask,camera,camera_scale,normal,geometry,graph,validate,review \
   --resume
 
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/test_holoscene_loader.py \
@@ -404,6 +481,8 @@ debug 只建议跑 10 到 50 step，目标是验证 dataset loader、loss 和训
 ```text
 meta/frame_consistency_report.json
 meta/camera_report.json
+meta/camera_scale_alignment_report.json
+meta/transforms_before_scale_align.json
 meta/mask_report.json
 meta/id_mapping_check.json
 meta/depth_report.json
@@ -499,7 +578,7 @@ python training/exp_runner.py \
 ```bash
 /root/autodl-tmp/conda-envs/sam3d/bin/python scripts/run_pipeline.py \
   --config configs/example_video.yaml \
-  --stages depth,normal,geometry,graph,validate,review \
+  --stages depth,camera_scale,normal,geometry,graph,validate,review \
   --resume
 ```
 

@@ -346,7 +346,7 @@ def _check_masks(
     errors: list[str],
     warnings: list[str],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    report: dict[str, Any] = {"frames": {}, "instances": {}, "ok": True}
+    report: dict[str, Any] = {"frames": {}, "instances": {}, "missing_background_frames": [], "ok": True}
     expected_wh = tuple(resolution) if resolution else None
     area_by_id: dict[int, list[float]] = {}
     frame_count_by_id: dict[int, int] = {}
@@ -363,7 +363,8 @@ def _check_masks(
         labels = sorted(int(v) for v in np.unique(arr))
         object_labels = [v for v in labels if v != 255]
         if 255 not in labels:
-            _error(errors, "mask", f"{stem} mask 不包含背景值 255。", "确保背景像素为 255。")
+            report["missing_background_frames"].append(stem)
+            _warn(warnings, "mask", f"{stem} mask 不包含背景值 255。", "若该帧被实例完全覆盖可忽略；否则检查背景 remap。")
         abnormal_high_labels = [v for v in object_labels if v >= 253]
         if abnormal_high_labels:
             _error(
@@ -699,6 +700,7 @@ def _write_validation(
         [
             "- `meta/frame_consistency_report.json`",
             "- `meta/camera_report.json`",
+            "- `meta/camera_scale_alignment_report.json`",
             "- `meta/mask_report.json`",
             "- `meta/id_mapping_check.json`",
             "- `meta/depth_report.json`",

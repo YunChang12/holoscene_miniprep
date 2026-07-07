@@ -41,7 +41,7 @@ def load_config(path: str | Path) -> PrepConfig:
     data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"Config must be a YAML mapping: {cfg_path}")
-    for section in ["scene", "frame", "camera", "mask", "depth", "normal", "graph", "review"]:
+    for section in ["scene", "frame", "camera", "camera_scale", "mask", "depth", "normal", "graph", "review"]:
         data.setdefault(section, {})
     scene = data["scene"]
     for key in ["name", "input_type", "input_path", "output_dir"]:
